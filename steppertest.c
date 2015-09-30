@@ -42,12 +42,18 @@ char uart_getchar(FILE *stream) {
 	return UDR0;
 }
 
+bool uart_kbhit(void)
+{
+	return UCSR0A & _BV(RXC0);
+}
+
 FILE uart_io = FDEV_SETUP_STREAM(uart_putchar, uart_getchar, _FDEV_SETUP_RW);
 
 void setup_uart(void)
 {
-	#define BAUD 115200
-	UBRR0 = 8;
+	#define BAUD 115200 // table 20-6
+	UBRR0 = 16;
+	UCSR0A |= _BV(U2X0); // 2x speed
 
 	UCSR0C = _BV(UCSZ01) | _BV(UCSZ00); /* 8-bit data */
 	UCSR0B = _BV(RXEN0) | _BV(TXEN0);   /* Enable RX and TX */
@@ -181,7 +187,7 @@ static inline void stop_timer(void)
 uint32_t timercounter = 0;
 ISR(TIMER1_OVF_vect)
 {
-	PORTB ^= _BV(PORTB5);
+	//PORTB ^= _BV(PORTB5);
 	timercounter += 1;
 	// set ICR1
 }
@@ -199,29 +205,105 @@ static void setup(void)
 	sei();
 }
 
+uint16_t getshort(void)
+{
+	union {
+		struct { uint8_t low, high; };
+		uint16_t word;
+	} res;
+	res.low = getchar();
+	res.high = getchar();
+	return res.word;
+}
+
 int main(void)
 {
 	setup();
 
 	puts("Hello!");
 
-	uint8_t ms = 4;
+	uint8_t ms = 16;
 	set_microstepping(ms);
 
 	if (1)
 	{
-		int16_t range = 200;
-		int16_t pos1 = 0, pos2 = 0;
-		int8_t dir1 = 0, dir2 = 0;
-		float timestep = (1.0 * 0x100) / 16e6;
-		float freq = 0.2;
+		float const scale = 0.0001;
+		float x = 0, y = 0;
+		int16_t vx = 0, vy = 0;
+		int16_t x0 = 0, y0 = 0;
 
 		while (true)
 		{
-			int16_t target1 = roundf(sin(2*M_PI*freq*timestep * timercounter) * 0.5 * range + 0.5);
-			int16_t target2 = roundf(cos(2*M_PI*freq*timestep * timercounter) * 0.5 * range + 0.5);
-			dir1 = (target1 > pos1) - (target1 < pos1);
-			dir2 = (target2 > pos2) - (target2 < pos2);
+			if (uart_kbhit())
+			{
+				vx = getshort();
+				vy = getshort();
+				//printf("velocity %+3d %+3d\n", vx, vy);
+			}
+
+			PORTB ^= _BV(PORTB5);
+
+			x += vx * scale;
+			y += vy * scale;
+
+			int16_t const x1 = x;
+			int16_t const y1 = y;
+
+			int8_t const dx = (x1 > x0) - (x1 < x0);
+			int8_t const dy = (y1 > y0) - (y1 < y0);
+
+			set_dir(dx, dy);
+
+			if (dx != 0)
+			{
+				pulse1();
+				x0 += dx;
+			}
+
+			if (dy != 0)
+			{
+				pulse2();
+				y0 += dy;
+			}//*/
+		}
+	}
+
+	if (1)
+	{
+		int16_t range = 50;
+		int16_t x0 = 0, y0 = 0;
+		float timestep = (1.0 * 0x100) / 16e6;
+		float freq = 0.1;
+
+		while (true)
+		{
+			if (uart_kbhit())
+			{
+				int8_t const vx = getchar();
+				int8_t const vy = getchar();
+				printf("velocity %+3d %+3d\n", vx, vy);
+			}
+
+			PORTB ^= _BV(PORTB5);
+
+			//printf("%f\n", timercounter * timestep);
+
+			//range = 100 - timercounter * timestep;
+			//if (range < 0) range = 0;
+			float const theta = 2*M_PI * freq * timercounter * timestep;
+			float const r = range * sin(theta * 1);
+			float const angle = theta;
+
+			//int16_t const x1 = cos(angle) * r;
+			int16_t const x1 = sin(angle) * range * 5;
+			int16_t const y1 = sin(angle * 2) * range;
+
+			//int16_t x1 = sin(theta) * 1 * range;
+			//int16_t y1 = sin(theta * 1) * range;
+
+
+			int8_t const dx = (x1 > x0) - (x1 < x0);
+			int8_t const dy = (y1 > y0) - (y1 < y0);
 
 			//printf("pos %+d dir %+d\n", pos, dir);
 
@@ -236,22 +318,19 @@ int main(void)
 			}
 			//*/
 
-			set_dir(dir1, dir2);
+			set_dir(dx, dy);
 
-			if (dir1 != 0)
+			if (dx != 0)
 			{
 				pulse1();
-				pos1 += dir1;
+				x0 += dx;
 			}
 
-			if (dir2 != 0)
+			if (dy != 0)
 			{
 				pulse2();
-				pos2 += dir2;
-			}
-
-			_delay_us(1e6 * timestep);
-
+				y0 += dy;
+			}//*/
 		}
 	}
 
