@@ -51,8 +51,8 @@ FILE uart_io = FDEV_SETUP_STREAM(uart_putchar, uart_getchar, _FDEV_SETUP_RW);
 
 void setup_uart(void)
 {
-	#define BAUD 115200 // table 20-6
-	UBRR0 = 16;
+	#define BAUD 9600 // table 20-6
+	UBRR0 = 207;
 	UCSR0A |= _BV(U2X0); // 2x speed
 
 	UCSR0C = _BV(UCSZ01) | _BV(UCSZ00); /* 8-bit data */
@@ -185,6 +185,7 @@ static inline void stop_timer(void)
 }
 
 uint32_t timercounter = 0;
+
 ISR(TIMER1_OVF_vect)
 {
 	//PORTB ^= _BV(PORTB5);
@@ -225,20 +226,66 @@ int main(void)
 	uint8_t ms = 16;
 	set_microstepping(ms);
 
+	int16_t trange = 2000;
+	int16_t time = 0;
+	int8_t dt = +1;
+
+	while (1)
+	{
+		static int dx = 1;
+		dx = -dx;
+
+		set_dir(dx, dx);
+		pulse2();
+		//pulse2();
+
+		if (time >= trange) dt = -1;
+		if (time <= 0) dt = +1;
+
+		time += dt * 10;
+
+		/*
+		for (int k = 10; k > 0; k -= 1) delay_us(10000);
+		/*/
+		if (dx > 0)
+			delay_us(trange - time);
+		else
+			delay_us(time);
+		//*/
+
+	}
+
 	if (1)
 	{
 		float const scale = 0.0001;
 		float x = 0, y = 0;
 		int16_t vx = 0, vy = 0;
-		int16_t x0 = 0, y0 = 0;
+		int32_t x0 = 0, y0 = 0;
+		int8_t getwhich = 0;
+		uint16_t updatecount = 0;
 
 		while (true)
 		{
 			if (uart_kbhit())
 			{
-				vx = getshort();
-				vy = getshort();
+				updatecount = 0;
+				switch (getwhich)
+				{
+					case 0: vx = getshort(); getwhich = 1; break;
+					case 1: vy = getshort(); getwhich = 0; break;
+				}
 				//printf("velocity %+3d %+3d\n", vx, vy);
+			}
+			updatecount += 1;
+
+			if (updatecount > 1000)
+			{
+				getwhich = 0;
+			}
+
+			if (updatecount > 10000)
+			{
+				vx = vy = 0;
 			}
 
 			PORTB ^= _BV(PORTB5);
@@ -246,8 +293,8 @@ int main(void)
 			x += vx * scale;
 			y += vy * scale;
 
-			int16_t const x1 = x;
-			int16_t const y1 = y;
+			typeof(x0) const x1 = x;
+			typeof(y0) const y1 = y;
 
 			int8_t const dx = (x1 > x0) - (x1 < x0);
 			int8_t const dy = (y1 > y0) - (y1 < y0);
@@ -268,10 +315,11 @@ int main(void)
 		}
 	}
 
-	if (1)
+	if (0)
 	{
 		int16_t range = 50;
-		int16_t x0 = 0, y0 = 0;
+		int32_t x0 = 0, y0 = 0;
+		int32_t x1 = 0, y1 = 0;
 		float timestep = (1.0 * 0x100) / 16e6;
 		float freq = 0.1;
 
@@ -279,28 +327,20 @@ int main(void)
 		{
 			if (uart_kbhit())
 			{
-				int8_t const vx = getchar();
-				int8_t const vy = getchar();
-				printf("velocity %+3d %+3d\n", vx, vy);
+				char buffer[100];
+				fgets(buffer, sizeof(buffer), stdin);
+				int32_t t1, t2;
+				int rv = sscanf(buffer, "%ld %ld\n", &t1, &t2);
+				if (rv == 2)
+				{
+					x1 = t1;
+					y1 = t2;
+					printf("going to %ld %ld\n", x1, y1);
+				}
+
 			}
 
 			PORTB ^= _BV(PORTB5);
-
-			//printf("%f\n", timercounter * timestep);
-
-			//range = 100 - timercounter * timestep;
-			//if (range < 0) range = 0;
-			float const theta = 2*M_PI * freq * timercounter * timestep;
-			float const r = range * sin(theta * 1);
-			float const angle = theta;
-
-			//int16_t const x1 = cos(angle) * r;
-			int16_t const x1 = sin(angle) * range * 5;
-			int16_t const y1 = sin(angle * 2) * range;
-
-			//int16_t x1 = sin(theta) * 1 * range;
-			//int16_t y1 = sin(theta * 1) * range;
-
 
 			int8_t const dx = (x1 > x0) - (x1 < x0);
 			int8_t const dy = (y1 > y0) - (y1 < y0);
@@ -331,6 +371,81 @@ int main(void)
 				pulse2();
 				y0 += dy;
 			}//*/
+
+			delay_us(500);
+		}
+	}
+
+	if (1)
+	{
+		int16_t range = 200;
+		int32_t x0 = 0, y0 = 0;
+		int32_t x1 = 0, y1 = 0;
+		float timestep = (1.0 * 0x100) / 16e6;
+		float freq = 0.1;
+
+		while (true)
+		{
+			if (uart_kbhit())
+			{
+				char buffer[100];
+				fgets(buffer, sizeof(buffer), stdin);
+				int32_t t1, t2;
+				int rv = sscanf(buffer, "%ld %ld\n", &t1, &t2);
+				if (rv == 2)
+				{
+					x1 = t1;
+					y1 = t2;
+					printf("going to %ld %ld\n", x1, y1);
+				}
+
+			}
+
+			PORTB ^= _BV(PORTB5);
+
+			//printf("%f\n", timercounter * timestep);
+
+			//range = 100 - timercounter * timestep;
+			//if (range < 0) range = 0;
+			float const theta = 2*M_PI * freq * timercounter * timestep;
+			//float const r = range * sin(theta * 1);
+			float const angle = theta;
+
+			//int16_t const x1 = cos(angle) * r;
+			int16_t const x1 = sin(angle) * range * 1;
+			int16_t const y1 = sin(angle * 1) * range;
+
+			int8_t const dx = (x1 > x0) - (x1 < x0);
+			int8_t const dy = (y1 > y0) - (y1 < y0);
+
+			//printf("pos %+d dir %+d\n", pos, dir);
+
+			/*
+			if (dir > 0 && pos >= range)
+			{
+			dir = -1;
+			}
+			else if (dir < 0 && pos <= 0)
+			{
+			dir = +1;
+			}
+			//*/
+
+			set_dir(dx, dy);
+
+			if (dx != 0)
+			{
+				pulse1();
+				x0 += dx;
+			}
+
+			if (dy != 0)
+			{
+				pulse2();
+				y0 += dy;
+			}//*/
+
+			delay_us(500);
 		}
 	}
 
