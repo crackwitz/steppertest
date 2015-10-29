@@ -25,48 +25,7 @@
 #include <avr/interrupt.h>
 #include <util/delay.h>
 
-struct motion {
-	uint32_t stepsleft;
-	uint32_t rampindex;
-	uint32_t rampmax;
-	uint32_t rampfactor;
-	int32_t position;
-	} motion1 = { .position = 0, .stepsleft = 0 }, motion2 = { .position = 0, .stepsleft = 0 };
-
-void uart_putchar(char c, FILE *stream) {
-	loop_until_bit_is_set(UCSR0A, UDRE0);
-	UDR0 = c;
-}
-char uart_getchar(FILE *stream) {
-	loop_until_bit_is_set(UCSR0A, RXC0); /* Wait until data exists. */
-	return UDR0;
-}
-
-bool uart_kbhit(void)
-{
-	return UCSR0A & _BV(RXC0);
-}
-
-FILE uart_io = FDEV_SETUP_STREAM(uart_putchar, uart_getchar, _FDEV_SETUP_RW);
-
-void setup_uart(void)
-{
-	#define BAUD 9600 // table 20-6
-	UBRR0 = 207;
-	UCSR0A |= _BV(U2X0); // 2x speed
-
-	UCSR0C = _BV(UCSZ01) | _BV(UCSZ00); /* 8-bit data */
-	UCSR0B = _BV(RXEN0) | _BV(TXEN0);   /* Enable RX and TX */
-
-	/* Set frame format: 8 data bits */
-	UCSR0C |= 1*_BV(UCSZ01) | 1*_BV(UCSZ00);
-
-	/* Enable receiver and transmitter */
-	UCSR0B |= _BV(RXEN0) | _BV(TXEN0);
-
-	stdout = &uart_io;
-	stdin  = &uart_io;
-}
+#include "uart.h"
 
 void delay_us(uint16_t n)
 {
@@ -230,7 +189,7 @@ int main(void)
 	int16_t time = 0;
 	int8_t dt = +1;
 
-	while (1)
+	while (0) // nanosteps
 	{
 		static int dx = 1;
 		dx = -dx;
@@ -266,7 +225,7 @@ int main(void)
 
 		while (true)
 		{
-			if (uart_kbhit())
+			if (uart_kbhit() >= 2)
 			{
 				updatecount = 0;
 				switch (getwhich)
@@ -281,9 +240,12 @@ int main(void)
 			if (updatecount > 1000)
 			{
 				getwhich = 0;
+				while (uart_kbhit())
+					getchar();
+				puts("input queue reset.");
 			}
 
-			if (updatecount > 10000)
+			if (updatecount > 20000)
 			{
 				vx = vy = 0;
 			}
@@ -312,67 +274,6 @@ int main(void)
 				pulse2();
 				y0 += dy;
 			}//*/
-		}
-	}
-
-	if (0)
-	{
-		int16_t range = 50;
-		int32_t x0 = 0, y0 = 0;
-		int32_t x1 = 0, y1 = 0;
-		float timestep = (1.0 * 0x100) / 16e6;
-		float freq = 0.1;
-
-		while (true)
-		{
-			if (uart_kbhit())
-			{
-				char buffer[100];
-				fgets(buffer, sizeof(buffer), stdin);
-				int32_t t1, t2;
-				int rv = sscanf(buffer, "%ld %ld\n", &t1, &t2);
-				if (rv == 2)
-				{
-					x1 = t1;
-					y1 = t2;
-					printf("going to %ld %ld\n", x1, y1);
-				}
-
-			}
-
-			PORTB ^= _BV(PORTB5);
-
-			int8_t const dx = (x1 > x0) - (x1 < x0);
-			int8_t const dy = (y1 > y0) - (y1 < y0);
-
-			//printf("pos %+d dir %+d\n", pos, dir);
-
-			/*
-			if (dir > 0 && pos >= range)
-			{
-			dir = -1;
-			}
-			else if (dir < 0 && pos <= 0)
-			{
-			dir = +1;
-			}
-			//*/
-
-			set_dir(dx, dy);
-
-			if (dx != 0)
-			{
-				pulse1();
-				x0 += dx;
-			}
-
-			if (dy != 0)
-			{
-				pulse2();
-				y0 += dy;
-			}//*/
-
-			delay_us(500);
 		}
 	}
 
@@ -449,52 +350,4 @@ int main(void)
 		}
 	}
 
-	uint32_t rampfactor = 30000;
-	uint32_t rampfactor_ = rampfactor;
-	uint32_t rampindex = 0;
-	uint32_t rampindex_ = 0;
-	uint32_t const rampmax = 300; // 4000;
-
-	uint16_t kshift = 0;
-	uint32_t counter = 0;
-	bool foo = false;
-	while(1)
-	{
-		pulse1();
-
-		counter += 1;
-		if (!(counter & 0xff))
-		PORTB ^= _BV(PORTB5);
-
-		if (rampindex_ >= ramplen)
-		{
-			//printf("kshift %d, rampindex_ %u, rampfactor_ %u\n", kshift, rampindex_, rampfactor_);
-			rampindex_ >>= 2;
-			rampfactor_ >>= 1;
-			kshift += 1;
-			putchar('%');
-			//printf("kshift %d, rampindex_ %u, rampfactor_ %u\n", kshift, rampindex_, rampfactor_);
-		}
-		uint32_t const delay = (((uint32_t)rampfactor_ * (uint32_t)ramp[rampindex_]) >> 16);
-		//printf("delay %lu\n", delay);
-		if (delay > 0) delay_us(delay);
-
-		if (rampindex < rampmax)
-		{
-			rampindex += 1;
-			uint16_t mod = rampindex & ((1UL << (2*kshift))-1);
-			//printf("1<<2k = %u\n", mod);
-			if (mod == 0)
-			{
-				rampindex_ += 1;
-				//putchar('+');
-			}
-		}
-		else if (!foo)
-		{
-			//puts("ramp done");
-			foo = true;
-		}
-
-	}
 }
