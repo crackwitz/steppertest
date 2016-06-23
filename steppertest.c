@@ -20,6 +20,12 @@
 
 
 #define F_CPU 16000000UL
+#define PULSE_TIME 2.0e-6
+//#define TIMER_FREQ 16384
+//#define SCALE 14
+//# 
+#define SCALE 14
+#define TIMER_FREQ (1<<SCALE)
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -42,9 +48,9 @@ inline void set_microstepping(uint8_t usteps)
 		case  2: pattern = 0b001; break;
 		case  4: pattern = 0b010; break;
 		case  8: pattern = 0b011; break;
-		//case 16: pattern = 0b100; break;
 		case 16: pattern = 0b111; break;
-		case 32: pattern = 0b101; break;
+		//case 16: pattern = 0b100; break;
+		//case 32: pattern = 0b101; break;
 		default:
 		fprintf(stderr, "invalid MS3:1");
 		return;
@@ -122,13 +128,13 @@ static void setup_timer(void)
 	TIMSK1 |= _BV(TOIE1);
 
 	// prescaler 1
-	OCR1A = (2e-6 * F_CPU / 1);
+	OCR1A = (PULSE_TIME * F_CPU / 1);
 }
 
 static inline void start_timer(void)
 {
-	ICR1 = 0xff;
-	TCCR1B |= (0b001 << CS10);
+	ICR1 = (uint16_t)(F_CPU / 1 / TIMER_FREQ + 0.5) - 1;
+	TCCR1B |= (0b001 << CS10); // div 1
 // 	{0b101, 1024},
 // 	{0b100, 256},
 // 	{0b011, 64},
@@ -145,11 +151,51 @@ static inline void stop_timer(void)
 
 uint32_t timercounter = 0;
 
+
+uint16_t atarget = 0; // steps / sec^2
+uint16_t vtarget = 0; // steps / sec
+
+uint32_t ax = 0, ay = 0; // fix .shift
+uint32_t vx = 0, vy = 0; // fix .shift
+uint32_t x = 0, y = 0; // fix .shift
+
+
 ISR(TIMER1_OVF_vect)
 {
 	//PORTB ^= _BV(PORTB5);
-	timercounter += 1;
+	//timercounter += 1;
 	// set ICR1
+
+	//x += vx;
+
+	if ((vy >> SCALE) < vtarget)
+	{
+		vy += atarget;
+	}
+	else if ((vy >> SCALE) > vtarget)
+	{
+		if (vy <= atarget)
+			vy = 0;
+		else
+			vy -= atarget;
+	}
+
+	y += vy >> SCALE;	
+	
+	if (y >> SCALE)
+	{
+		pulse2();
+		y -= 1 << SCALE;
+	}
+
+	/*	
+	timercounter += 1;
+	if (timercounter >> SCALE)
+	{
+		printf("%u %lu %lu\n", atarget, vy >> SCALE, y >> SCALE);
+		timercounter = 0;
+	}
+	//*/
 }
 
 static void setup(void)
@@ -171,8 +217,8 @@ uint16_t getshort(void)
 		struct { uint8_t low, high; };
 		uint16_t word;
 	} res;
-	res.low = getchar();
 	res.high = getchar();
+	res.low = getchar();
 	return res.word;
 }
 
@@ -182,8 +228,10 @@ int main(void)
 
 	puts("Hello!");
 
-	uint8_t ms = 16;
+	uint8_t ms = 4;
 	set_microstepping(ms);
+	
+	set_dir(-1, +1);
 
 	int16_t trange = 2000;
 	int16_t time = 0;
@@ -216,64 +264,64 @@ int main(void)
 
 	if (1)
 	{
-		float const scale = 0.0001;
-		float x = 0, y = 0;
-		int16_t vx = 0, vy = 0;
-		int32_t x0 = 0, y0 = 0;
 		int8_t getwhich = 0;
 		uint16_t updatecount = 0;
 
 		while (true)
 		{
+			if (uart_kbhit() >= 1)
+			{
+				uint8_t command = getchar();
+				uint16_t value = getshort();
+				switch(command)
+				{
+					case 1:
+						vtarget = value;
+						printf("v = %3u\n", vtarget);
+						break;
+					case 2:
+						atarget = value;
+						printf("a = %3u\n", atarget);
+						break;
+					default:
+						continue;
+				}
+			}
+			
+			/*
 			if (uart_kbhit() >= 2)
 			{
 				updatecount = 0;
 				switch (getwhich)
 				{
-					case 0: vx = getshort(); getwhich = 1; break;
-					case 1: vy = getshort(); getwhich = 0; break;
+					case 0: vx = vy = getshort(); getwhich = 0; break;
+
+					//case 0: vx = getshort(); getwhich = 1; break;
+					//case 1: vy = getshort(); getwhich = 0; break;
 				}
-				//printf("velocity %+3d %+3d\n", vx, vy);
+				printf("velocity %3lu %3lu\n", vx, vy);
 			}
 			updatecount += 1;
+			*/
 
-			if (updatecount > 1000)
+			/*if (updatecount % 1000 == 0)
 			{
 				getwhich = 0;
 				while (uart_kbhit())
 					getchar();
 				puts("input queue reset.");
+				updatecount = 0;
 			}
+			//*/
 
+			/*
 			if (updatecount > 20000)
 			{
 				vx = vy = 0;
 			}
+			//*/
 
 			PORTB ^= _BV(PORTB5);
-
-			x += vx * scale;
-			y += vy * scale;
-
-			typeof(x0) const x1 = x;
-			typeof(y0) const y1 = y;
-
-			int8_t const dx = (x1 > x0) - (x1 < x0);
-			int8_t const dy = (y1 > y0) - (y1 < y0);
-
-			set_dir(dx, dy);
-
-			if (dx != 0)
-			{
-				pulse1();
-				x0 += dx;
-			}
-
-			if (dy != 0)
-			{
-				pulse2();
-				y0 += dy;
-			}//*/
 		}
 	}
 
